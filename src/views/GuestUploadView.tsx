@@ -197,8 +197,11 @@ export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) 
       setQueue([]);
     } else {
       setQueue(failedItems);
+      const failureDetails = failedItems
+        .map((item) => `${item.filename}: ${item.errorMessage || 'неизвестная ошибка сервера'}`)
+        .join(' ');
       setErrorMessage(
-        `Не удалось отправить ${failedItems.length} фото на сервер. Они не добавлены в альбом. Проверьте подключение и повторите попытку.`
+        `Не удалось сохранить ${failedItems.length} фото на сервере. Фото не добавлены в альбом. ${failureDetails}`
       );
     }
   };
@@ -412,7 +415,7 @@ export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) 
             {errorMessage && (
               <div className="rounded-xl border border-red-800/60 bg-red-950/40 p-3.5 text-xs text-red-300 flex items-center gap-2">
                 <AlertCircle className="h-4 w-4 shrink-0 text-red-400" />
-                <span>{errorMessage}</span>
+                <span className="min-w-0 break-words">{errorMessage}</span>
               </div>
             )}
 

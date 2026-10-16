@@ -116,7 +116,7 @@ export const translations = {
     fileSizeLimit: 'Maximum Upload Size Limit',
     allowedFormats: 'Supported File Formats',
     databaseIntegration: 'Database & Supabase Integration',
-    supabaseInstructions: 'Aperture Live runs with fully functional browser persistence and IndexedDB. To connect a dedicated PostgreSQL + Supabase backend, run the following SQL schema in your Supabase SQL Editor and set your environment variables.',
+    supabaseInstructions: 'For shared albums and photo uploads on Vercel, run this SQL in the Supabase SQL Editor. Then add SUPABASE_URL and the server-only SUPABASE_SECRET_KEY in Vercel Project Settings → Environment Variables. Never expose the secret key in browser code.',
   },
   ru: {
     // Brand & General
@@ -233,7 +233,7 @@ export const translations = {
     fileSizeLimit: 'Максимальный размер файла',
     allowedFormats: 'Разрешенные форматы',
     databaseIntegration: 'Интеграция с базой данных Supabase',
-    supabaseInstructions: 'Aperture Live работает с надежным локальным хранилищем IndexedDB. Для подключения собственного облачного PostgreSQL + Supabase скопируйте SQL схему.',
+    supabaseInstructions: 'Чтобы альбомы и фото синхронизировались между телефоном и сайтом на Vercel, выполните эту SQL-схему в Supabase SQL Editor. Затем добавьте SUPABASE_URL и серверный SUPABASE_SECRET_KEY в Vercel → Project Settings → Environment Variables. Не добавляйте секретный ключ во фронтенд и не используйте префикс VITE_.',
   }
 };
 

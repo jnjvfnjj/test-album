@@ -569,41 +569,60 @@ class StorageService {
 
   public getSupabaseSchemaSql(): string {
     return `-- =====================================================================
--- Aperture Live: Supabase PostgreSQL Schema & Security Policies
+-- Aperture Live: persistent photo and album storage for Vercel
 -- =====================================================================
 
-create table if not exists public.profiles (
-  id uuid references auth.users on delete cascade primary key,
-  display_name text not null,
-  avatar_url text,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
-);
-
-create table if not exists public.albums (
-  id uuid default gen_random_uuid() primary key,
-  owner_id uuid references public.profiles(id) on delete cascade not null,
+create table if not exists public.app_albums (
+  id text primary key,
+  owner_id text not null,
   title text not null,
   description text,
-  cover_url text,
+  cover_url text not null default '',
   public_token text unique not null,
+  privacy text not null default 'public',
   access_code text,
-  privacy text check (privacy in ('public', 'code_protected')) default 'public' not null,
-  uploads_enabled boolean default true not null,
-  event_date date,
+  uploads_enabled boolean not null default true,
+  created_at timestamptz not null default now(),
+  event_date text,
   location text,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+  constraint app_albums_privacy_check check (privacy in ('public', 'code_protected'))
 );
 
-create table if not exists public.photos (
-  id uuid default gen_random_uuid() primary key,
-  album_id uuid references public.albums(id) on delete cascade not null,
+create table if not exists public.app_photos (
+  id text primary key,
+  album_id text not null references public.app_albums(id) on delete cascade,
   storage_path text not null,
   original_filename text not null,
-  contributor_name text default 'Guest' not null,
+  contributor_name text not null default 'Гость',
   file_size bigint not null,
   mime_type text not null,
-  created_at timestamp with time zone default timezone('utc'::text, now()) not null
+  created_at timestamptz not null default now()
 );
+
+create index if not exists app_photos_album_created_idx
+  on public.app_photos (album_id, created_at desc);
+
+alter table public.app_albums enable row level security;
+alter table public.app_photos enable row level security;
+revoke all on table public.app_albums, public.app_photos from anon, authenticated;
+grant all on table public.app_albums, public.app_photos to service_role;
+
+insert into storage.buckets (id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'album-photos',
+  'album-photos',
+  true,
+  52428800,
+  array['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'image/svg+xml']
+)
+on conflict (id) do update
+set public = excluded.public,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+-- In Vercel Project Settings > Environment Variables add:
+-- SUPABASE_URL=https://<project-ref>.supabase.co
+-- SUPABASE_SECRET_KEY=<server-only secret key; do not use a VITE_ prefix>
 `;
   }
 }
