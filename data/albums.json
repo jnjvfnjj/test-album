@@ -1,5 +1,15 @@
 [
   {
+    "id": "album_mvau8kp8_x5y77",
+    "ownerId": "user_demo_alex",
+    "title": "Guest Test",
+    "coverUrl": "",
+    "publicToken": "aundje5euh",
+    "privacy": "public",
+    "uploadsEnabled": true,
+    "createdAt": "2026-10-16T11:40:11.085Z"
+  },
+  {
     "id": "album_mvat0hak_judh",
     "ownerId": "user_demo_alex",
     "title": "авава",

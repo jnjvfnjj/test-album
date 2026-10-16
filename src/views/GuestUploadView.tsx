@@ -3,7 +3,6 @@ import { Album, UploadItem } from '../types';
 import { storageService } from '../services/storageService';
 import { extractAlbumFromUrl } from '../utils/albumUrl';
 import { safeFormatDate } from '../utils/dateUtils';
-import { useRouter } from '../context/RouterContext';
 import { useI18n } from '../utils/i18n';
 import {
   Camera,
@@ -14,9 +13,7 @@ import {
   PauseCircle,
   ShieldCheck,
   Plus,
-  ArrowLeft,
-  ImageIcon,
-  Sparkles
+  ImageIcon
 } from 'lucide-react';
 
 interface GuestUploadViewProps {
@@ -26,8 +23,11 @@ interface GuestUploadViewProps {
 const MAX_FILE_SIZE = 30 * 1024 * 1024; // 30 MB
 
 export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) => {
-  const { navigate } = useRouter();
   const { t } = useI18n();
+  const cameraVideoRef = useRef<HTMLVideoElement>(null);
+  const cameraStreamRef = useRef<MediaStream | null>(null);
+  const cameraMountedRef = useRef(false);
+  const cameraRequestRef = useRef(0);
 
   // Instant 0ms synchronous resolution: loads immediately on phone without any dark waiting screen
   const [album, setAlbum] = useState<Album>(() => {
@@ -47,6 +47,106 @@ export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) 
   const [uploadSuccess, setUploadSuccess] = useState(false);
   const [uploadedPhotos, setUploadedPhotos] = useState<{ previewUrl: string; filename: string }[]>([]);
   const [errorMessage, setErrorMessage] = useState('');
+  const [cameraError, setCameraError] = useState('');
+  const [cameraReady, setCameraReady] = useState(false);
+
+  const stopCamera = () => {
+    cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+    cameraStreamRef.current = null;
+    if (cameraVideoRef.current) cameraVideoRef.current.srcObject = null;
+    setCameraReady(false);
+  };
+
+  const startCamera = async () => {
+    const requestId = ++cameraRequestRef.current;
+    setCameraError('');
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setCameraError('Браузер не поддерживает камеру. Выберите фото из галереи ниже.');
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: false,
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1920 } },
+      });
+      if (!cameraMountedRef.current || requestId !== cameraRequestRef.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
+      }
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = stream;
+      if (cameraVideoRef.current) {
+        cameraVideoRef.current.srcObject = stream;
+        await cameraVideoRef.current.play();
+      }
+      setCameraReady(true);
+    } catch (err) {
+      if (requestId !== cameraRequestRef.current) return;
+      console.warn('Could not start guest camera', err);
+      setCameraError(
+        'Не удалось открыть камеру. Разрешите доступ к камере в браузере или выберите фото из галереи ниже.'
+      );
+    }
+  };
+
+  const captureAndUploadPhoto = async () => {
+    const video = cameraVideoRef.current;
+    if (!video || !album || !cameraStreamRef.current || !video.videoWidth || isUploading) return;
+
+    const scale = Math.min(1, 1920 / video.videoWidth);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(video.videoWidth * scale);
+    canvas.height = Math.round(video.videoHeight * scale);
+    const context = canvas.getContext('2d');
+    if (!context) {
+      setCameraError('Не удалось обработать снимок. Попробуйте выбрать фото из галереи.');
+      return;
+    }
+
+    context.drawImage(video, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+    if (!blob) {
+      setCameraError('Не удалось создать файл фотографии. Попробуйте ещё раз.');
+      return;
+    }
+
+    const filename = `photo_${Date.now()}.jpg`;
+    const file = new File([blob], filename, { type: 'image/jpeg', lastModified: Date.now() });
+    const previewUrl = URL.createObjectURL(blob);
+    stopCamera();
+    setIsUploading(true);
+    setErrorMessage('');
+    setCameraError('');
+    setUploadSuccess(false);
+
+    try {
+      await storageService.uploadPhoto(
+        album.id,
+        file,
+        contributorName || 'Гость',
+        {
+          title: album.title,
+          publicToken: album.publicToken,
+          description: album.description,
+        },
+        { requireServerPersistence: true }
+      );
+      setUploadedPhotos([{ previewUrl, filename }]);
+      setUploadSuccess(true);
+      setQueue([]);
+    } catch (err) {
+      console.error('Camera photo upload error', err);
+      URL.revokeObjectURL(previewUrl);
+      setErrorMessage(
+        err instanceof Error ? err.message : 'Не удалось отправить фото в альбом.'
+      );
+      setCameraError('Фото не отправлено. Камера перезапускается — можно сделать снимок ещё раз.');
+      void startCamera();
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   // Background non-blocking sync to retrieve any extra album metadata from server
   useEffect(() => {
@@ -61,6 +161,19 @@ export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) 
       isMounted = false;
     };
   }, [token]);
+
+  useEffect(() => {
+    if (album?.uploadsEnabled) {
+      cameraMountedRef.current = true;
+      void startCamera();
+    }
+    return () => {
+      cameraMountedRef.current = false;
+      cameraRequestRef.current++;
+      cameraStreamRef.current?.getTracks().forEach((track) => track.stop());
+      cameraStreamRef.current = null;
+    };
+  }, [album?.id, album?.uploadsEnabled]);
 
   // Handle files selected from camera or gallery
   const handleFiles = (files: FileList | null) => {
@@ -211,6 +324,7 @@ export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) 
     setUploadedPhotos([]);
     setQueue([]);
     setErrorMessage('');
+    void startCamera();
   };
 
   if (loading) {
@@ -233,12 +347,6 @@ export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) 
           <p className="mt-2 text-xs text-neutral-400">
             Возможно, ссылка устарела или QR-код недействителен.
           </p>
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="mt-6 inline-flex rounded-lg bg-neutral-100 px-4 py-2 text-xs font-semibold text-neutral-950 hover:bg-white"
-          >
-            На главную
-          </button>
         </div>
       </div>
     );
@@ -247,21 +355,10 @@ export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) 
   return (
     <div className="min-h-screen bg-neutral-950 text-neutral-100 pb-16">
 
-      {/* Top Navigation Bar with Back Button */}
+      {/* Guest-only header: intentionally has no link to organizer controls */}
       <div className="border-b border-neutral-800 bg-neutral-950/90 backdrop-blur-md px-4 py-3">
-        <div className="mx-auto flex max-w-2xl items-center justify-between">
-          <button
-            onClick={() => (window.history.length > 1 ? window.history.back() : navigate('/dashboard'))}
-            className="flex items-center gap-1.5 rounded-lg border border-neutral-800 bg-neutral-900 px-3 py-1.5 text-xs font-medium text-neutral-300 hover:bg-neutral-800 hover:text-white transition-colors"
-            title="Назад на предыдущую страницу"
-          >
-            <ArrowLeft className="h-3.5 w-3.5" />
-            <span>Назад</span>
-          </button>
-          <div
-            onClick={() => navigate('/dashboard')}
-            className="cursor-pointer text-xs font-bold text-white hover:opacity-80"
-          >
+        <div className="mx-auto flex max-w-2xl items-center justify-center">
+          <div className="text-xs font-bold text-white">
             Aperture Live
           </div>
         </div>
@@ -317,6 +414,59 @@ export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) 
 
       {/* Main Content Area */}
       <div className="mx-auto max-w-2xl px-4 sm:px-6 pt-6">
+        {/* Camera starts automatically; capturing always requires an explicit tap. */}
+        {album.uploadsEnabled && !uploadSuccess && (
+          <div className="mb-6 overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900 shadow-xl">
+            <div className="relative aspect-[4/3] bg-black">
+              <video
+                ref={cameraVideoRef}
+                autoPlay
+                muted
+                playsInline
+                className={`h-full w-full object-cover ${cameraReady ? '' : 'hidden'}`}
+                aria-label="Предварительный просмотр камеры"
+              />
+              {!cameraReady && (
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center text-neutral-300">
+                  <Camera className="h-10 w-10 text-emerald-400" />
+                  <p className="text-sm">
+                    {cameraError || 'Запрашиваем доступ к камере…'}
+                  </p>
+                  {cameraError && (
+                    <button
+                      type="button"
+                      onClick={startCamera}
+                      className="rounded-lg bg-neutral-100 px-4 py-2 text-xs font-semibold text-neutral-950"
+                    >
+                      Включить камеру
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="p-3">
+              <button
+                type="button"
+                onClick={captureAndUploadPhoto}
+                disabled={!cameraReady || isUploading}
+                className="flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-500 px-4 py-3.5 text-sm font-bold text-neutral-950 transition-colors hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {isUploading ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-neutral-950 border-t-transparent" />
+                    <span>Отправляем фото в альбом…</span>
+                  </>
+                ) : (
+                  <>
+                    <Camera className="h-5 w-5" />
+                    <span>Сделать и отправить фото</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Paused Notice */}
         {!album.uploadsEnabled ? (
           <div className="rounded-2xl border border-amber-900/50 bg-amber-950/20 p-8 text-center">
@@ -452,44 +602,22 @@ export const GuestUploadView: React.FC<GuestUploadViewProps> = ({ token = '' }) 
               </div>
             </div>
 
-            {/* Direct Camera and Gallery Quick Selectors */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {/* Native Camera Trigger */}
-              <div className="relative overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 hover:border-neutral-600 px-4 py-3.5 text-xs font-bold text-white transition-all active:scale-95 shadow-sm cursor-pointer">
-                <input
-                  type="file"
-                  accept="image/*"
-                  capture="environment"
-                  onChange={(e) => {
-                    handleFiles(e.target.files);
-                    e.target.value = '';
-                  }}
-                  className="absolute inset-0 h-full w-full opacity-0 cursor-pointer z-20"
-                  aria-label="Сделать фото на камеру"
-                />
-                <div className="flex items-center justify-center gap-2.5">
-                  <Camera className="h-4 w-4 text-emerald-400" />
-                  <span>Сделать фото на камеру</span>
-                </div>
-              </div>
-
-              {/* Native Gallery Trigger */}
-              <div className="relative overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 hover:border-neutral-600 px-4 py-3.5 text-xs font-bold text-white transition-all active:scale-95 shadow-sm cursor-pointer">
-                <input
-                  type="file"
-                  accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.webp"
-                  multiple
-                  onChange={(e) => {
-                    handleFiles(e.target.files);
-                    e.target.value = '';
-                  }}
-                  className="absolute inset-0 h-full w-full opacity-0 cursor-pointer z-20"
-                  aria-label="Выбрать из галереи"
-                />
-                <div className="flex items-center justify-center gap-2.5">
-                  <ImageIcon className="h-4 w-4 text-sky-400" />
-                  <span>Выбрать из галереи</span>
-                </div>
+            {/* Native gallery fallback */}
+            <div className="relative overflow-hidden rounded-xl border border-neutral-700 bg-neutral-900 px-4 py-3.5 text-xs font-bold text-white shadow-sm transition-all hover:border-neutral-600 hover:bg-neutral-800">
+              <input
+                type="file"
+                accept="image/*,.heic,.heif,.jpg,.jpeg,.png,.webp"
+                multiple
+                onChange={(e) => {
+                  handleFiles(e.target.files);
+                  e.target.value = '';
+                }}
+                className="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+                aria-label="Выбрать из галереи"
+              />
+              <div className="flex items-center justify-center gap-2.5">
+                <ImageIcon className="h-4 w-4 text-sky-400" />
+                <span>Выбрать из галереи</span>
               </div>
             </div>
 
